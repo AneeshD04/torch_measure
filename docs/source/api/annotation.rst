@@ -4,6 +4,11 @@ Annotation
 Tools for annotating benchmark items with demand vectors using the
 18-dimension ADeLe rubric system from the Nature 2026 paper.
 
+:class:`DemandAnnotator` accepts any client that implements
+``generate(prompt: str) -> tuple[str, str]``, so any LLM provider
+(OpenAI, Anthropic, Azure, etc.) can be used in place of :class:`GeminiClient`
+by wrapping it in a class with that single method.
+
 .. automodule:: torch_measure.annotation
    :members:
 

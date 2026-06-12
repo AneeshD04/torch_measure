@@ -24,6 +24,11 @@ class DemandAnnotator:
 
     One API call per demand rubric (18 sequential calls) plus one UG call.
     Results are cached to avoid redundant API calls across runs.
+
+    ``client`` can be any object implementing
+    ``generate(prompt: str) -> tuple[str, str]``. The bundled
+    :class:`GeminiClient` is the default, but any LLM provider can be used
+    by wrapping it in a class with that single method.
     """
 
     def __init__(

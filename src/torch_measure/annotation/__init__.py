@@ -4,6 +4,12 @@ Reproduces the annotation methodology from:
   Zhou et al. (2026) "General scales unlock AI evaluation with explanatory
   and predictive power." Nature.
 
+``DemandAnnotator`` accepts any client that implements
+``generate(prompt: str) -> tuple[str, str]`` (response text, finish reason).
+``GeminiClient`` is the bundled implementation, but any LLM provider
+(OpenAI, Anthropic, Azure, etc.) can be used by wrapping it in a class with
+that single method.
+
 Public API
 ----------
 DemandAnnotator   — main entry point: annotates one item or a full dataset
