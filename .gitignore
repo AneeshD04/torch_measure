@@ -1,5 +1,7 @@
-# Test annotation cache (API responses — do not commit)
+# Test annotation caches (API responses — do not commit)
 tests/test_annotation/paper_comparison_cache.jsonl
+tests/test_annotation/*_comparison_cache.jsonl
+tests/test_annotation/annotation_comparison.png
 
 # Python
 __pycache__/

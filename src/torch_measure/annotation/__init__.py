@@ -33,7 +33,9 @@ DEMAND_DIMENSIONS — the first 18 (excludes UG)
 """
 from ._annotator import DemandAnnotator
 from ._cache import AnnotationCache
+from ._claude_client import ClaudeClient
 from ._client import GeminiClient
+from ._openai_client import OpenAIClient
 from ._rubrics import RubricsCatalog
 from ._types import (
     DEMAND_DIMENSIONS,
@@ -51,7 +53,9 @@ from ._ug import UGAnnotator
 
 __all__ = [
     "DemandAnnotator",
+    "ClaudeClient",
     "GeminiClient",
+    "OpenAIClient",
     "RubricsCatalog",
     "AnnotationCache",
     "UGAnnotator",

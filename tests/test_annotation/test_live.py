@@ -1,15 +1,25 @@
 # Copyright (c) 2026 AIMS Foundations. MIT License.
 
-"""Live end-to-end tests — require a real Gemini API key.
+"""Live end-to-end tests — require a real API key.
 
 These tests make real API calls and consume quota. Run only when you want
 to verify actual model behavior.
 
-Usage:
-    GEMINI_API_KEY=<key> GEMINI_MODEL=gemini-3.1-flash-lite \
-        pytest tests/test_annotation/test_live.py -v -m "network and slow"
+Usage (Gemini):
+    $env:GEMINI_API_KEY = "<key>"
+    pytest tests/test_annotation/test_live.py -v -s -m "network and slow"
 
-Skip automatically if GEMINI_API_KEY is not set.
+Usage (Claude):
+    $env:ANNOTATOR_CLIENT = "claude"
+    $env:ANTHROPIC_API_KEY = "<key>"
+    pytest tests/test_annotation/test_live.py -v -s -m "network and slow"
+
+Usage (OpenAI):
+    $env:ANNOTATOR_CLIENT = "openai"
+    $env:OPENAI_API_KEY = "<key>"
+    pytest tests/test_annotation/test_live.py -v -s -m "network and slow"
+
+Skip automatically if the required API key is not set.
 """
 
 import math
@@ -20,8 +30,10 @@ import pytest
 from torch_measure.annotation import (
     AnnotationCache,
     AnnotationJob,
+    ClaudeClient,
     DemandAnnotator,
     GeminiClient,
+    OpenAIClient,
     RubricsCatalog,
 )
 from torch_measure.annotation._types import DEMAND_DIMENSIONS
@@ -34,24 +46,48 @@ pytestmark = [pytest.mark.network, pytest.mark.slow]
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
-def api_key():
-    key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not key:
-        pytest.skip("GEMINI_API_KEY environment variable not set")
+def client_type():
+    return os.environ.get("ANNOTATOR_CLIENT", "gemini").strip().lower()
+
+
+@pytest.fixture(scope="module")
+def api_key(client_type):
+    if client_type == "claude":
+        key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if not key:
+            pytest.skip("ANTHROPIC_API_KEY environment variable not set")
+    elif client_type == "openai":
+        key = os.environ.get("OPENAI_API_KEY", "").strip()
+        if not key:
+            pytest.skip("OPENAI_API_KEY environment variable not set")
+    else:
+        key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if not key:
+            pytest.skip("GEMINI_API_KEY environment variable not set")
     return key
 
 
 @pytest.fixture(scope="module")
-def model_id():
+def model_id(client_type):
+    if client_type == "claude":
+        return os.environ.get("CLAUDE_MODEL", "claude-opus-4-8")
+    if client_type == "openai":
+        return os.environ.get("OPENAI_MODEL", "gpt-4o")
     return os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite")
 
 
 @pytest.fixture(scope="module")
-def live_annotator(api_key, model_id, tmp_path_factory):
-    client = GeminiClient(api_key=api_key, model=model_id)
+def live_annotator(api_key, model_id, client_type, tmp_path_factory):
+    if client_type == "claude":
+        client = ClaudeClient(api_key=api_key, model=model_id)
+    elif client_type == "openai":
+        client = OpenAIClient(api_key=api_key, model=model_id)
+    else:
+        client = GeminiClient(api_key=api_key, model=model_id)
     rubrics = RubricsCatalog()
     cache_dir = tmp_path_factory.mktemp("live_annotation_cache")
     cache = AnnotationCache(cache_dir / "cache.jsonl")
+    print(f"\nClient: {client_type}  Model: {model_id}")
     return DemandAnnotator(client=client, rubrics=rubrics, cache=cache)
 
 
