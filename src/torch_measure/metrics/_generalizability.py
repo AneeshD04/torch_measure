@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from itertools import combinations, product as iterproduct
+from itertools import combinations
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -48,9 +48,7 @@ def _validate_design(df: pd.DataFrame, facet_cols: list[str], response_col: str)
     for f in facet_cols:
         levs = sorted(df[f].unique(), key=str)
         if len(levs) < 2:
-            raise ValueError(
-                f"Facet {f!r} needs at least 2 levels; got {len(levs)}."
-            )
+            raise ValueError(f"Facet {f!r} needs at least 2 levels; got {len(levs)}.")
         n_levels[f] = len(levs)
         sorted_levels[f] = levs
 
@@ -61,17 +59,12 @@ def _validate_design(df: pd.DataFrame, facet_cols: list[str], response_col: str)
     cell_counts = df.groupby(facet_cols, observed=True)[response_col].count()
 
     if len(cell_counts) < expected_cells:
-        raise ValueError(
-            f"Design is not fully crossed: {len(cell_counts)}/{expected_cells} "
-            f"cells observed."
-        )
+        raise ValueError(f"Design is not fully crossed: {len(cell_counts)}/{expected_cells} cells observed.")
 
     counts_arr = cell_counts.values
     cmin, cmax = int(counts_arr.min()), int(counts_arr.max())
     if cmin != cmax:
-        raise ValueError(
-            f"Unequal replication: cell counts range from {cmin} to {cmax}."
-        )
+        raise ValueError(f"Unequal replication: cell counts range from {cmin} to {cmax}.")
 
     return n_levels, int(counts_arr[0]), sorted_levels
 
@@ -114,18 +107,13 @@ def _build_cell_means(
     """Return an ndarray of cell means with shape ``(n_f1, n_f2, ...)``."""
     cell_means_series = df.groupby(facet_list, observed=True)[response_col].mean()
     shape = tuple(n_levels[f] for f in facet_list)
-    level_to_idx = {
-        f: {lev: i for i, lev in enumerate(sorted_levels[f])}
-        for f in facet_list
-    }
+    level_to_idx = {f: {lev: i for i, lev in enumerate(sorted_levels[f])} for f in facet_list}
 
     means = np.empty(shape, dtype=float)
     for idx_tuple, val in cell_means_series.items():
         if not isinstance(idx_tuple, tuple):
             idx_tuple = (idx_tuple,)
-        arr_idx = tuple(
-            level_to_idx[f][idx_tuple[j]] for j, f in enumerate(facet_list)
-        )
+        arr_idx = tuple(level_to_idx[f][idx_tuple[j]] for j, f in enumerate(facet_list))
         means[arr_idx] = val
 
     return means
@@ -141,9 +129,7 @@ def _compute_ms_error(
     """Within-cell mean-square error (0 when *n_reps* == 1)."""
     if n_reps <= 1:
         return 0.0
-    cell_mean_col = df.groupby(facet_list, observed=True)[response_col].transform(
-        "mean"
-    )
+    cell_mean_col = df.groupby(facet_list, observed=True)[response_col].transform("mean")
     ss_e = float(((df[response_col] - cell_mean_col) ** 2).sum())
     total_cells = int(np.prod(list(n_levels.values())))
     df_e = total_cells * (n_reps - 1)
@@ -177,11 +163,7 @@ def _anova_components(
         for combo in combinations(all_axes, r):
             all_subsets.append(frozenset(combo))
 
-    effects = (
-        [s for s in all_subsets if s in selected]
-        if selected is not None
-        else list(all_subsets)
-    )
+    effects = [s for s in all_subsets if s in selected] if selected is not None else list(all_subsets)
 
     grand_mean = float(means_array.mean())
 
@@ -189,9 +171,7 @@ def _anova_components(
     for S in all_subsets:
         axes_to_avg = tuple(i for i in all_axes if i not in S)
         marginal = means_array.mean(axis=axes_to_avg) if axes_to_avg else means_array
-        n_per = n_reps * int(
-            np.prod([n_levels[facet_list[i]] for i in all_axes if i not in S])
-        )
+        n_per = n_reps * int(np.prod([n_levels[facet_list[i]] for i in all_axes if i not in S]))
         Q[S] = n_per * float(np.sum((marginal - grand_mean) ** 2))
 
     # Möbius inversion: SS_S = Σ_{T⊆S} (-1)^(|S|-|T|) Q_T
@@ -204,16 +184,12 @@ def _anova_components(
                 ss += ((-1) ** (len(S) - r)) * Q[T]
         SS[S] = ss
 
-    df_eff = {
-        S: int(np.prod([n_levels[facet_list[i]] - 1 for i in S])) for S in effects
-    }
+    df_eff = {S: int(np.prod([n_levels[facet_list[i]] - 1 for i in S])) for S in effects}
 
     MS = {S: SS[S] / df_eff[S] if df_eff[S] > 0 else 0.0 for S in effects}
 
     def _ems_coeff(T: frozenset[int]) -> int:
-        return n_reps * int(
-            np.prod([n_levels[facet_list[i]] for i in all_axes if i not in T])
-        )
+        return n_reps * int(np.prod([n_levels[facet_list[i]] for i in all_axes if i not in T]))
 
     # Solve top-down; propagate raw (unclamped) estimates, clamp only at output.
     sorted_effects = sorted(effects, key=lambda s: (-len(s), sorted(s)))
@@ -235,7 +211,7 @@ def _anova_components(
         key = _effect_key(S, facet_list)
         raw_components[key] = sigma2_raw[S]
         components[key] = max(0.0, sigma2_raw[S])
-        identifiability[key] = not (n_reps <= 1 and S == full_interaction)
+        identifiability[key] = not (n_reps <= 1 and full_interaction == S)
 
     raw_components["residual"] = ms_e
     components["residual"] = max(0.0, ms_e)

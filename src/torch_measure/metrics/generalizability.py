@@ -99,16 +99,10 @@ def variance_components(
         if object_facet is None:
             raise ValueError("object_facet is required when facet_cols is given.")
         if object_facet not in facet_list:
-            raise ValueError(
-                f"object_facet={object_facet!r} not in facet_cols."
-            )
+            raise ValueError(f"object_facet={object_facet!r} not in facet_cols.")
         df = response_matrix[facet_list + [response_col]].dropna(subset=[response_col])
-        n_levels, n_reps, sorted_levels = _validate_design(
-            df, facet_list, response_col
-        )
-        means = _build_cell_means(
-            df, facet_list, response_col, n_levels, sorted_levels
-        )
+        n_levels, n_reps, sorted_levels = _validate_design(df, facet_list, response_col)
+        means = _build_cell_means(df, facet_list, response_col, n_levels, sorted_levels)
         ms_e = _compute_ms_error(df, facet_list, response_col, n_levels, n_reps)
         selected = _parse_interactions(interactions, facet_list)
         components, identifiability, raw_components = _anova_components(
@@ -244,23 +238,16 @@ def g_coefficient(
     if type not in {"relative", "absolute"}:
         raise ValueError(f"type must be 'relative' or 'absolute'; got {type!r}.")
     if facet_sizes is not None and n_items is not None:
-        raise TypeError(
-            "Pass either facet_sizes (multi-facet) or "
-            "n_items/n_reps (two-facet), not both."
-        )
+        raise TypeError("Pass either facet_sizes (multi-facet) or n_items/n_reps (two-facet), not both.")
 
     # --- multi-facet path ---
     if facet_sizes is not None:
         for v in facet_sizes.values():
             if v < 1:
-                raise ValueError(
-                    f"All facet_sizes must be >= 1; got {facet_sizes}."
-                )
+                raise ValueError(f"All facet_sizes must be >= 1; got {facet_sizes}.")
         if n_reps is not None and n_reps < 1:
             raise ValueError(f"n_reps must be >= 1; got {n_reps}.")
-        sigma_p, rel_err, abs_err = _g_coefficients(
-            variance_components, facet_sizes, n_reps=n_reps
-        )
+        sigma_p, rel_err, abs_err = _g_coefficients(variance_components, facet_sizes, n_reps=n_reps)
         err = abs_err if type == "absolute" else rel_err
         denom = sigma_p + err
         return sigma_p / denom if denom > 1e-12 else 0.0
@@ -269,9 +256,7 @@ def g_coefficient(
     if n_reps is None:
         n_reps = 1
     if n_items is None:
-        raise TypeError(
-            "n_items is required when facet_sizes is not provided."
-        )
+        raise TypeError("n_items is required when facet_sizes is not provided.")
 
     required = {"subject", "item", "subject_item", "residual"}
     missing = required - set(variance_components)
@@ -407,14 +392,12 @@ def d_study(
         **Multi-facet mode:** one ``n_<facet>`` column per non-object facet,
         plus ``n_reps`` if *n_reps_grid_multi* is provided.
     """
-    import pandas as pd
     from itertools import product as iterproduct
 
+    import pandas as pd
+
     if design_grid is not None and (n_items_grid is not None or n_reps_grid is not None):
-        raise TypeError(
-            "Pass either design_grid (multi-facet) or "
-            "n_items_grid/n_reps_grid (two-facet), not both."
-        )
+        raise TypeError("Pass either design_grid (multi-facet) or n_items_grid/n_reps_grid (two-facet), not both.")
 
     # --- multi-facet path ---
     if design_grid is not None:
@@ -427,31 +410,28 @@ def d_study(
         grids = [design_grid[f] for f in facet_names]
         rows = []
         for combo in iterproduct(*grids):
-            ss = dict(zip(facet_names, combo))
+            ss = dict(zip(facet_names, combo, strict=True))
             for nr in reps_list:
-                sigma_p, rel_err, abs_err = _g_coefficients(
-                    variance_components, ss, n_reps=nr
-                )
+                sigma_p, rel_err, abs_err = _g_coefficients(variance_components, ss, n_reps=nr)
                 g_rel = sigma_p / (sigma_p + rel_err) if (sigma_p + rel_err) > 1e-12 else 0.0
                 g_abs = sigma_p / (sigma_p + abs_err) if (sigma_p + abs_err) > 1e-12 else 0.0
                 row = {f"n_{f}": int(v) for f, v in ss.items()}
                 if n_reps_grid_multi is not None:
                     row["n_reps"] = int(nr)
-                row.update({
-                    "g_relative": g_rel,
-                    "g_absolute": g_abs,
-                    "se_relative": float(np.sqrt(rel_err)),
-                    "se_absolute": float(np.sqrt(abs_err)),
-                })
+                row.update(
+                    {
+                        "g_relative": g_rel,
+                        "g_absolute": g_abs,
+                        "se_relative": float(np.sqrt(rel_err)),
+                        "se_absolute": float(np.sqrt(abs_err)),
+                    }
+                )
                 rows.append(row)
         return pd.DataFrame(rows)
 
     # --- two-facet path ---
     if n_items_grid is None or n_reps_grid is None:
-        raise TypeError(
-            "n_items_grid and n_reps_grid are required when design_grid "
-            "is not provided."
-        )
+        raise TypeError("n_items_grid and n_reps_grid are required when design_grid is not provided.")
     if len(n_items_grid) == 0 or len(n_reps_grid) == 0:
         raise ValueError("n_items_grid and n_reps_grid must be non-empty.")
 

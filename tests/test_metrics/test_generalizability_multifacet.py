@@ -93,8 +93,12 @@ class TestMultiFacetVarianceComponents:
         )
         comps = vc["components"]
         expected_keys = {
-            "subject", "item", "rater",
-            ("subject", "item"), ("subject", "rater"), ("item", "rater"),
+            "subject",
+            "item",
+            "rater",
+            ("subject", "item"),
+            ("subject", "rater"),
+            ("item", "rater"),
             ("subject", "item", "rater"),
             "residual",
         }
@@ -278,9 +282,13 @@ class TestMultiFacetGCoefficient:
             "n_levels": {"subject": 30, "item": 10, "rater": 5},
             "n_reps": 2,
             "identifiable": {
-                "subject": True, "item": True, "rater": True,
-                ("subject", "item"): True, ("subject", "rater"): True,
-                ("item", "rater"): True, ("subject", "item", "rater"): True,
+                "subject": True,
+                "item": True,
+                "rater": True,
+                ("subject", "item"): True,
+                ("subject", "rater"): True,
+                ("item", "rater"): True,
+                ("subject", "item", "rater"): True,
                 "residual": True,
             },
             "method": "moments",
@@ -359,12 +367,19 @@ class TestMultiFacetDStudy:
             "facets": ["subject", "item", "rater"],
             "n_levels": {"subject": 30, "item": 10, "rater": 5},
             "n_reps": 2,
-            "identifiable": {k: True for k in [
-                "subject", "item", "rater",
-                ("subject", "item"), ("subject", "rater"),
-                ("item", "rater"), ("subject", "item", "rater"),
-                "residual",
-            ]},
+            "identifiable": {
+                k: True
+                for k in [
+                    "subject",
+                    "item",
+                    "rater",
+                    ("subject", "item"),
+                    ("subject", "rater"),
+                    ("item", "rater"),
+                    ("subject", "item", "rater"),
+                    "residual",
+                ]
+            },
             "method": "moments",
         }
 
@@ -466,10 +481,7 @@ class TestMultiFacetBootstrap:
         )
         a = bootstrap_variance_components(df, seed=1, **common)
         b = bootstrap_variance_components(df, seed=2, **common)
-        any_diff = any(
-            not np.allclose(a["samples"][k], b["samples"][k])
-            for k in a["components"]
-        )
+        any_diff = any(not np.allclose(a["samples"][k], b["samples"][k]) for k in a["components"])
         assert any_diff
 
     def test_ci_brackets_point_estimate_for_dominant_component(self):
@@ -543,9 +555,7 @@ class TestMultiFacetBootstrap:
                 "n_levels": out["n_levels"],
                 "n_reps": out["n_reps"],
             }
-            g_boots.append(
-                g_coefficient(boot_vc, facet_sizes={"item": 5, "rater": 3}, type="absolute")
-            )
+            g_boots.append(g_coefficient(boot_vc, facet_sizes={"item": 5, "rater": 3}, type="absolute"))
         assert all(0.0 <= g <= 1.0 for g in g_boots)
 
 
@@ -572,9 +582,7 @@ class TestMultiFacetEndToEnd:
             facet_cols=["subject", "item", "rater"],
             object_facet="subject",
         )
-        g = g_coefficient(
-            vc, facet_sizes={"item": 8, "rater": 4}, type="absolute"
-        )
+        g = g_coefficient(vc, facet_sizes={"item": 8, "rater": 4}, type="absolute")
         assert 0.0 < g < 1.0
 
         proj = d_study(vc, design_grid={"item": [8, 16], "rater": [2, 4]})
