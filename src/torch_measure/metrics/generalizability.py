@@ -1,6 +1,9 @@
 # Copyright (c) 2026 AIMS Foundations. MIT License.
 
-"""Generalizability-theory reliability for two-way crossed designs."""
+"""Generalizability-theory reliability for crossed random-facet designs.
+
+Supports both two-way (person x item x replication) and fully crossed multi-facet designs via keyword-only arguments.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +11,16 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import numpy as np
+
+from torch_measure.metrics._generalizability import (
+    _anova_components,
+    _bootstrap_resample,
+    _build_cell_means,
+    _compute_ms_error,
+    _g_coefficients,
+    _parse_interactions,
+    _validate_design,
+)
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -20,12 +33,19 @@ def variance_components(
     trial_col: str = "trial",
     response_col: str = "response",
     method: str = "moments",
+    *,
+    facet_cols: Sequence[str] | None = None,
+    object_facet: str | None = None,
+    interactions: str | Sequence = "all",
 ) -> dict:
     """Decompose Var(response) into subject, item, subject x item, and residual facets.
 
     Henderson Method I (moments-based ANOVA estimator) on a person x item x
     replication crossed design. Negative variance estimates are clamped to 0.
     With one observation per cell, residual is unidentifiable.
+
+    When *facet_cols* is provided, estimates components for a balanced, fully
+    crossed multi-facet design instead.
 
     Parameters
     ----------
@@ -36,14 +56,33 @@ def variance_components(
         Column names; defaults match the measurement-db long-form schema.
     method : {"moments"}
         Only ``"moments"`` is implemented in v1.
+    facet_cols : sequence of str, keyword-only, optional
+        Column names for each facet (>= 2). Activates multi-facet mode.
+        The design must be fully crossed and balanced.
+    object_facet : str, keyword-only, optional
+        Which facet is the object of measurement.
+        Required when *facet_cols* is provided. Must be one of *facet_cols*.
+    interactions : ``"all"`` or sequence of tuples, keyword-only, optional
+        ``"all"`` estimates every interaction; pass a list of tuples to
+        select specific ones (main effects are always included).
 
     Returns
     -------
     dict
+        **Two-facet mode:**
+
         Keys: ``subject``, ``item``, ``subject_item``, ``residual`` (variances,
         floats), ``n_subjects``, ``n_items`` (ints), ``n_reps_harmonic``
         (float; harmonic mean of cell counts), ``identifiable`` (dict[str,
         bool]), ``method`` (str).
+
+        **Multi-facet mode:**
+
+        Keys: ``components`` (dict keyed by facet name (str) for main effects
+        or tuple for interactions, plus ``"residual"``), ``object_facet``
+        (str), ``facets`` (list[str]), ``n_levels`` (dict[str, int]),
+        ``n_reps`` (int), ``identifiable`` (dict[str | tuple, bool]),
+        ``method`` (str).
     """
     import pandas as pd
 
@@ -52,6 +91,35 @@ def variance_components(
     if method != "moments":
         raise ValueError(f"Unknown method: {method!r}.")
 
+    # --- multi-facet path ---
+    if facet_cols is not None:
+        facet_list = list(facet_cols)
+        if len(facet_list) < 2:
+            raise ValueError("facet_cols must contain at least 2 facets.")
+        if object_facet is None:
+            raise ValueError("object_facet is required when facet_cols is given.")
+        if object_facet not in facet_list:
+            raise ValueError(f"object_facet={object_facet!r} not in facet_cols.")
+        df = response_matrix[facet_list + [response_col]].dropna(subset=[response_col])
+        n_levels, n_reps, sorted_levels = _validate_design(df, facet_list, response_col)
+        means = _build_cell_means(df, facet_list, response_col, n_levels, sorted_levels)
+        ms_e = _compute_ms_error(df, facet_list, response_col, n_levels, n_reps)
+        selected = _parse_interactions(interactions, facet_list)
+        components, identifiability, raw_components = _anova_components(
+            means, facet_list, n_levels, n_reps, ms_e, selected
+        )
+        return {
+            "components": components,
+            "raw_components": raw_components,
+            "object_facet": object_facet,
+            "facets": facet_list,
+            "n_levels": n_levels,
+            "n_reps": n_reps,
+            "identifiable": identifiability,
+            "method": "moments",
+        }
+
+    # --- two-facet path ---
     required = {subject_col, item_col, trial_col, response_col}
     missing = required - set(response_matrix.columns)
     if missing:
@@ -126,38 +194,74 @@ def variance_components(
 
 def g_coefficient(
     variance_components: dict,
-    n_items: int,
-    n_reps: int = 1,
+    n_items: int | None = None,
+    n_reps: int | None = None,
     type: str = "absolute",
+    *,
+    facet_sizes: dict[str, int] | None = None,
 ) -> float:
-    """Brennan (2001) G-coefficient under a person x item x replication design.
+    """Brennan (2001) G-coefficient under a crossed random-facet design.
 
-    Relative G uses ranking-only error (subject x item + residual); absolute G
-    (Phi) also includes the item main effect.
+    Relative G uses ranking-only error (interactions with the object of
+    measurement + residual); absolute G (Phi) also includes all other
+    main effects.
+
+    For subject x item designs, pass *n_items* (and optionally *n_reps*).
+    For designs with 3+ facets, pass *facet_sizes* instead.
 
     Parameters
     ----------
     variance_components : dict
-        Output of :func:`variance_components`, or any dict with keys
-        ``subject``, ``item``, ``subject_item``, ``residual``.
-    n_items : int
-        Number of items in the projected design (>= 1).
-    n_reps : int
-        Replications per cell in the projected design (>= 1).
+        Output of :func:`variance_components`.
+    n_reps : int, optional
+        Projected within-cell replications (>= 1). Defaults to 1 in
+        two-facet mode, or the observed value in multi-facet mode.
     type : {"relative", "absolute"}
         Which G-coefficient to compute.
+
+    *Two-facet parameters:*
+
+    n_items : int, optional
+        Number of items in the projected design (>= 1).
+
+    *Multi-facet parameters:*
+
+    facet_sizes : dict[str, int], keyword-only, optional
+        Projected sizes for every non-object facet. The object facet is
+        read from *variance_components* automatically.
 
     Returns
     -------
     float
         G-coefficient in [0, 1]. 0.0 if the denominator is numerically zero.
     """
+    if type not in {"relative", "absolute"}:
+        raise ValueError(f"type must be 'relative' or 'absolute'; got {type!r}.")
+    if facet_sizes is not None and n_items is not None:
+        raise TypeError("Pass either facet_sizes (multi-facet) or n_items/n_reps (two-facet), not both.")
+
+    # --- multi-facet path ---
+    if facet_sizes is not None:
+        for v in facet_sizes.values():
+            if v < 1:
+                raise ValueError(f"All facet_sizes must be >= 1; got {facet_sizes}.")
+        if n_reps is not None and n_reps < 1:
+            raise ValueError(f"n_reps must be >= 1; got {n_reps}.")
+        sigma_p, rel_err, abs_err = _g_coefficients(variance_components, facet_sizes, n_reps=n_reps)
+        err = abs_err if type == "absolute" else rel_err
+        denom = sigma_p + err
+        return sigma_p / denom if denom > 1e-12 else 0.0
+
+    # --- two-facet path ---
+    if n_reps is None:
+        n_reps = 1
+    if n_items is None:
+        raise TypeError("n_items is required when facet_sizes is not provided.")
+
     required = {"subject", "item", "subject_item", "residual"}
     missing = required - set(variance_components)
     if missing:
         raise ValueError(f"Missing required keys: {sorted(missing)}.")
-    if type not in {"relative", "absolute"}:
-        raise ValueError(f"type must be 'relative' or 'absolute'; got {type!r}.")
     if n_items < 1 or n_reps < 1:
         raise ValueError(f"n_items and n_reps must be >= 1; got n_items={n_items}, n_reps={n_reps}.")
 
@@ -186,6 +290,8 @@ def intraclass_correlation(
     (absolute agreement / consistency); ICC2k/ICC3k average over k raters and
     equal the absolute / relative :func:`g_coefficient` at ``n_reps=1``.
     One-way forms (ICC1) need a one-way model and are not supported here.
+    Multi-facet variance components are not supported; use
+    :func:`g_coefficient` with *facet_sizes* instead.
 
     Parameters
     ----------
@@ -203,6 +309,12 @@ def intraclass_correlation(
     float
         ICC in [0, 1]. 0.0 if the denominator is numerically zero.
     """
+    if "facets" in variance_components:
+        raise TypeError(
+            "intraclass_correlation() does not support multi-facet variance "
+            "components. Use g_coefficient() with facet_sizes instead."
+        )
+
     required = {"subject", "item", "subject_item", "residual"}
     missing = required - set(variance_components)
     if missing:
@@ -238,27 +350,88 @@ def intraclass_correlation(
 
 def d_study(
     variance_components: dict,
-    n_items_grid: Sequence[int],
-    n_reps_grid: Sequence[int],
+    n_items_grid: Sequence[int] | None = None,
+    n_reps_grid: Sequence[int] | None = None,
+    *,
+    design_grid: dict[str, Sequence[int]] | None = None,
+    n_reps_grid_multi: Sequence[int] | None = None,
 ) -> pd.DataFrame:
-    """Project G-coefficients and SEs over a (n_items, n_reps) design grid.
+    """Project G-coefficients and SEs over a design grid.
+
+    For subject x item designs, pass *n_items_grid* and *n_reps_grid*.
+    For designs with 3+ facets, pass *design_grid* instead.
 
     Parameters
     ----------
     variance_components : dict
         Output of :func:`variance_components`.
-    n_items_grid, n_reps_grid : sequence of int
-        Candidate design dimensions to project.
+
+    *Two-facet parameters:*
+
+    n_items_grid : sequence of int, optional
+        Candidate numbers of items to project.
+    n_reps_grid : sequence of int, optional
+        Candidate numbers of within-cell replications to project.
+
+    *Multi-facet parameters:*
+
+    design_grid : dict[str, sequence of int], keyword-only, optional
+        Mapping from non-object facet name to candidate sizes.
+    n_reps_grid_multi : sequence of int, keyword-only, optional
+        Candidate within-cell replications for multi-facet mode.
+        Defaults to ``[observed_n_reps]``.
 
     Returns
     -------
     pandas.DataFrame
-        One row per (n_items, n_reps) cell with columns ``n_items``,
-        ``n_reps``, ``g_relative``, ``g_absolute``, ``se_relative``,
-        ``se_absolute``.
+        One row per design cell with columns ``g_relative``, ``g_absolute``,
+        ``se_relative``, ``se_absolute``.
+
+        **Two-facet mode:** also includes ``n_items``, ``n_reps``.
+
+        **Multi-facet mode:** one ``n_<facet>`` column per non-object facet,
+        plus ``n_reps`` if *n_reps_grid_multi* is provided.
     """
+    from itertools import product as iterproduct
+
     import pandas as pd
 
+    if design_grid is not None and (n_items_grid is not None or n_reps_grid is not None):
+        raise TypeError("Pass either design_grid (multi-facet) or n_items_grid/n_reps_grid (two-facet), not both.")
+
+    # --- multi-facet path ---
+    if design_grid is not None:
+        facet_names = list(design_grid.keys())
+        for f in facet_names:
+            if len(design_grid[f]) == 0:
+                raise ValueError(f"design_grid[{f!r}] must be non-empty.")
+
+        reps_list = list(n_reps_grid_multi) if n_reps_grid_multi is not None else [None]
+        grids = [design_grid[f] for f in facet_names]
+        rows = []
+        for combo in iterproduct(*grids):
+            ss = dict(zip(facet_names, combo, strict=True))
+            for nr in reps_list:
+                sigma_p, rel_err, abs_err = _g_coefficients(variance_components, ss, n_reps=nr)
+                g_rel = sigma_p / (sigma_p + rel_err) if (sigma_p + rel_err) > 1e-12 else 0.0
+                g_abs = sigma_p / (sigma_p + abs_err) if (sigma_p + abs_err) > 1e-12 else 0.0
+                row = {f"n_{f}": int(v) for f, v in ss.items()}
+                if n_reps_grid_multi is not None:
+                    row["n_reps"] = int(nr)
+                row.update(
+                    {
+                        "g_relative": g_rel,
+                        "g_absolute": g_abs,
+                        "se_relative": float(np.sqrt(rel_err)),
+                        "se_absolute": float(np.sqrt(abs_err)),
+                    }
+                )
+                rows.append(row)
+        return pd.DataFrame(rows)
+
+    # --- two-facet path ---
+    if n_items_grid is None or n_reps_grid is None:
+        raise TypeError("n_items_grid and n_reps_grid are required when design_grid is not provided.")
     if len(n_items_grid) == 0 or len(n_reps_grid) == 0:
         raise ValueError("n_items_grid and n_reps_grid must be non-empty.")
 
@@ -294,15 +467,18 @@ def bootstrap_variance_components(
     n_boot: int = 2000,
     ci: float = 0.95,
     seed: int | None = None,
+    *,
+    facet_cols: Sequence[str] | None = None,
+    object_facet: str | None = None,
+    interactions: str | Sequence = "all",
 ) -> dict:
-    """Nonparametric bootstrap CIs for variance components by resampling subjects.
+    """Nonparametric bootstrap CIs for variance components.
 
-    Subjects are the exchangeable unit: each bootstrap draw samples
-    ``n_subjects`` subjects with replacement, relabels duplicates so each
+    Each bootstrap draw resamples subjects (or *object_facet* levels in
+    multi-facet mode) with replacement, relabels duplicates so each
     draw is treated as a distinct unit, and re-fits :func:`variance_components`.
-    Percentile CIs are reported. The full bootstrap distribution for each
-    component is also returned so callers can derive CIs for any function of
-    the components (e.g. :func:`g_coefficient`, :func:`intraclass_correlation`).
+    Percentile CIs are reported. The full bootstrap distribution is also returned so callers
+    can derive CIs for any function of the components (e.g. :func:`g_coefficient`).
 
     Parameters
     ----------
@@ -316,80 +492,81 @@ def bootstrap_variance_components(
         Confidence level in (0, 1).
     seed : int | None
         Seed for ``numpy.random.default_rng``.
+    facet_cols : sequence of str, keyword-only, optional
+        Activates multi-facet mode.
+    object_facet : str, keyword-only, optional
+        Object of measurement (required with *facet_cols*).
+    interactions : ``"all"`` or sequence, keyword-only, optional
+        Forwarded to :func:`variance_components`.
 
     Returns
     -------
     dict
-        Keys: ``subject``, ``item``, ``subject_item``, ``residual`` (point
-        estimates on the original sample), ``n_subjects``, ``n_items``,
-        ``n_reps_harmonic``, ``identifiable``, ``method`` (as in
-        :func:`variance_components`), plus ``ci`` (dict[str, tuple[float,
-        float]] per component), ``samples`` (dict[str, numpy.ndarray] of
-        length ``n_boot``), ``n_boot`` (int), and ``ci_level`` (float).
-    """
-    import pandas as pd
+        All keys from :func:`variance_components`, plus:
 
+        - ``"ci"`` — percentile CIs per component (dict[key, tuple[float, float]]).
+        - ``"samples"`` — bootstrap draws per component (dict[key, ndarray]).
+        - ``"n_boot"`` (int), ``"ci_level"`` (float).
+
+        In multi-facet mode, ``ci`` and ``samples`` are keyed by component
+        name (str or tuple), matching the ``"components"`` dict.
+    """
     if n_boot < 1:
         raise ValueError(f"n_boot must be >= 1; got {n_boot}.")
     if not 0.0 < ci < 1.0:
         raise ValueError(f"ci must be in (0, 1); got {ci}.")
 
-    point = variance_components(
-        response_matrix,
-        subject_col=subject_col,
-        item_col=item_col,
-        trial_col=trial_col,
-        response_col=response_col,
-        method=method,
-    )
+    if facet_cols is not None:
+        # --- multi-facet ---
+        if object_facet is None:
+            raise ValueError("object_facet is required when facet_cols is given.")
 
-    subject_ids = response_matrix[subject_col].unique()
-    n_subjects = len(subject_ids)
-    rng = np.random.default_rng(seed)
-
-    by_subject = {sid: response_matrix[response_matrix[subject_col] == sid] for sid in subject_ids}
-
-    component_keys = ("subject", "item", "subject_item", "residual")
-    samples: dict[str, list[float]] = {k: [] for k in component_keys}
-
-    for _ in range(n_boot):
-        drawn = rng.choice(subject_ids, size=n_subjects, replace=True)
-        frames = []
-        for j, sid in enumerate(drawn):
-            block = by_subject[sid].copy()
-            block[subject_col] = f"__boot{j}__"
-            frames.append(block)
-        boot_df = pd.concat(frames, ignore_index=True)
-        try:
-            vc = variance_components(
-                boot_df,
-                subject_col=subject_col,
-                item_col=item_col,
-                trial_col=trial_col,
-                response_col=response_col,
-                method=method,
-            )
-        except ValueError:
-            continue  # skip degenerate draws (e.g. accidentally singular cell counts)
-        for k in component_keys:
-            samples[k].append(float(vc[k]))
-
-    alpha = (1.0 - ci) / 2.0
-    samples_np = {k: np.asarray(v, dtype=float) for k, v in samples.items()}
-    ci_dict = {
-        k: (
-            float(np.quantile(samples_np[k], alpha)),
-            float(np.quantile(samples_np[k], 1.0 - alpha)),
+        vc_kwargs: dict = dict(
+            response_col=response_col,
+            method=method,
+            facet_cols=facet_cols,
+            object_facet=object_facet,
+            interactions=interactions,
         )
-        if len(samples_np[k]) > 0
-        else (float("nan"), float("nan"))
-        for k in component_keys
-    }
+        point = variance_components(response_matrix, **vc_kwargs)
+
+        samples_np, ci_dict, n_boot_out, ci_level = _bootstrap_resample(
+            df=response_matrix,
+            object_col=object_facet,
+            vc_caller=lambda df: variance_components(df, **vc_kwargs),
+            extract_components=lambda vc: vc["components"],
+            n_boot=n_boot,
+            ci=ci,
+            seed=seed,
+            point_estimate=point,
+        )
+    else:
+        # --- two-facet ---
+        vc_kwargs = dict(
+            subject_col=subject_col,
+            item_col=item_col,
+            trial_col=trial_col,
+            response_col=response_col,
+            method=method,
+        )
+        point = variance_components(response_matrix, **vc_kwargs)
+
+        _component_keys = ("subject", "item", "subject_item", "residual")
+        samples_np, ci_dict, n_boot_out, ci_level = _bootstrap_resample(
+            df=response_matrix,
+            object_col=subject_col,
+            vc_caller=lambda df: variance_components(df, **vc_kwargs),
+            extract_components=lambda vc: {k: vc[k] for k in _component_keys},
+            n_boot=n_boot,
+            ci=ci,
+            seed=seed,
+            point_estimate=point,
+        )
 
     return {
         **point,
         "ci": ci_dict,
         "samples": samples_np,
-        "n_boot": int(n_boot),
-        "ci_level": float(ci),
+        "n_boot": n_boot_out,
+        "ci_level": ci_level,
     }
