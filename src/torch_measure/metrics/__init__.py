@@ -5,6 +5,7 @@
 from torch_measure.metrics.calibration import brier_score, expected_calibration_error
 from torch_measure.metrics.correlation import point_biserial_correlation, tetrachoric_correlation
 from torch_measure.metrics.generalizability import (
+    bayesian_variance_components,
     bootstrap_variance_components,
     d_study,
     g_coefficient,
@@ -38,6 +39,7 @@ __all__ = [
     "outfit_statistics",
     "item_total_correlation",
     "cronbach_alpha",
+    "bayesian_variance_components",
     "variance_components",
     "g_coefficient",
     "intraclass_correlation",
